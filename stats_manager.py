@@ -28,6 +28,7 @@ class StatsManager:
         
         # Source tracking for visualization
         self.download_by_source: Dict[str, int] = {} 
+        self.recent_downloads: List[tuple] = [] # (timestamp, bytes, source)
 
     def add_upload(self, num_bytes: int):
         self.upload_bytes += num_bytes
@@ -37,6 +38,9 @@ class StatsManager:
         if source not in self.download_by_source:
             self.download_by_source[source] = 0
         self.download_by_source[source] += num_bytes
+        
+        # Add to recent list
+        self.recent_downloads.append((time.time(), num_bytes, source))
 
     def update_peers(self, peers: List[tuple]):
         self.active_peers = peers
@@ -50,6 +54,8 @@ class StatsManager:
     def get_stats(self) -> Dict[str, Any]:
         # Calculate rates
         now = time.time()
+        
+        # Update Rates
         dt = now - self.last_calc_time
         if dt >= 1.0: # Update rate every second roughly
             self.current_upload_rate = (self.upload_bytes - self.last_upload_bytes) / dt
@@ -58,6 +64,15 @@ class StatsManager:
             self.last_upload_bytes = self.upload_bytes
             self.last_download_bytes = self.download_bytes
             self.last_calc_time = now
+
+        # Calculate Recent Distribution (Last 10s)
+        cutoff = now - 10.0
+        # Prune old records (keep list small)
+        self.recent_downloads = [x for x in self.recent_downloads if x[0] > cutoff]
+        
+        recent_dist = {}
+        for _, b, src in self.recent_downloads:
+            recent_dist[src] = recent_dist.get(src, 0) + b
 
         return {
             "uptime": int(now - self.start_time),
@@ -69,5 +84,6 @@ class StatsManager:
             "peer_count": len(self.active_peers),
             "buffer_health": self.buffer_health,
             "bitmap": self.my_bitmap_summary,
-            "source_distribution": self.download_by_source
+            "source_distribution": self.download_by_source,
+            "source_distribution_10s": recent_dist
         }

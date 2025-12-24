@@ -49,9 +49,16 @@ HTML_TEMPLATE = """
     </div>
 
     <div class="card">
-        <h2>Data Source Distribution (P2P Proof)</h2>
+        <h2>Data Source Distribution (Total)</h2>
         <div style="width: 300px; height: 300px;">
             <canvas id="sourceChart"></canvas>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Data Source (Last 10s) - Realtime</h2>
+        <div style="width: 300px; height: 300px;">
+            <canvas id="recentSourceChart"></canvas>
         </div>
     </div>
 
@@ -84,6 +91,24 @@ HTML_TEMPLATE = """
 
         const ctxSource = document.getElementById('sourceChart').getContext('2d');
         const sourceChart = new Chart(ctxSource, {
+            type: 'pie',
+            data: {
+                labels: [],
+                datasets: [{
+                    data: [],
+                    backgroundColor: ['#ff6384', '#36a2eb', '#cc65fe', '#ffce56', '#4bc0c0']
+                }]
+            },
+            options: {
+                responsive: true,
+                plugins: {
+                    legend: { position: 'right' }
+                }
+            }
+        });
+
+        const ctxRecent = document.getElementById('recentSourceChart').getContext('2d');
+        const recentChart = new Chart(ctxRecent, {
             type: 'pie',
             data: {
                 labels: [],
@@ -133,11 +158,18 @@ HTML_TEMPLATE = """
                     trafficChart.data.datasets[1].data.push(data.upload_rate / 1024);
                     trafficChart.update();
 
-                    // Update Source Chart
+                    // Update Source Chart (Total)
                     if (data.source_distribution) {
                         sourceChart.data.labels = Object.keys(data.source_distribution);
                         sourceChart.data.datasets[0].data = Object.values(data.source_distribution).map(v => (v/1024/1024).toFixed(2));
                         sourceChart.update();
+                    }
+
+                    // Update Recent Chart (10s)
+                    if (data.source_distribution_10s) {
+                        recentChart.data.labels = Object.keys(data.source_distribution_10s);
+                        recentChart.data.datasets[0].data = Object.values(data.source_distribution_10s).map(v => (v/1024).toFixed(2));
+                        recentChart.update();
                     }
                 });
         }

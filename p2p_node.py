@@ -266,7 +266,7 @@ class P2PNode:
         Periodically broadcast bitmap to all peers.
         """
         while self.running:
-            await asyncio.sleep(1.0) # 1Hz broadcast
+            await asyncio.sleep(0.2) # 5Hz broadcast (Fast Update for P2P)
             
             # Stats Integration
             from stats_manager import StatsManager
@@ -350,6 +350,12 @@ class P2PNode:
                 if viewers:
                     target_peer = random.choice(viewers)
                 elif broadcasters:
+                    # OPTIMIZATION: Broadcaster Backoff
+                    # If only Broadcaster has it, mostly wait for peers to get it.
+                    # Sacrifice Latency for P2P Ratio.
+                    if random.random() < 0.9:
+                         continue
+                         
                     target_peer = random.choice(broadcasters)
                 else:
                     # Should not happen as we got chunk from availability list
