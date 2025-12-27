@@ -8,9 +8,17 @@ class Peer:
         self.role = role
         self.last_seen = time.time()
         self.remote_bitmap: Set[int] = set()
+        self.rtt = 0.0 # Round Trip Time in seconds
 
     def update_seen(self):
         self.last_seen = time.time()
+        
+    def update_rtt(self, rtt: float):
+        # Exponential Moving Average
+        if self.rtt == 0.0:
+            self.rtt = rtt
+        else:
+            self.rtt = 0.7 * self.rtt + 0.3 * rtt
 
     def update_bitmap(self, bitmap_data: Set[int]):
         self.remote_bitmap = bitmap_data

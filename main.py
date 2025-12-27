@@ -119,13 +119,34 @@ async def viewer_loop(node: P2PNode):
 
         await asyncio.sleep(0.01)
 
+def get_lan_ip():
+    s = None
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        # Doesn't need to be reachable
+        s.connect(('8.8.8.8', 1))
+        IP = s.getsockname()[0]
+    except Exception:
+        IP = '127.0.0.1'
+    finally:
+        if s:
+            s.close()
+    return IP
+
 async def main():
-    parser = argparse.ArgumentParser(description="SJTU P2P Streamer")
-    parser.add_argument("--role", choices=["broadcaster", "viewer"], required=True)
-    parser.add_argument("--port", type=int, default=8888)
-    parser.add_argument("--connect", help="Peer to connect to (host:port)")
+    parser = argparse.ArgumentParser(description="P2P Video Streaming Node")
+    parser.add_argument('--role', choices=['broadcaster', 'viewer'], required=True, help="Node role")
+    parser.add_argument('--port', type=int, required=True, help="UDP Port to bind")
+    parser.add_argument('--connect', type=str, help="Initial peer to connect to (host:port)")
     
     args = parser.parse_args()
+    
+    # Print Multi-machine info
+    lan_ip = get_lan_ip()
+    logger.info(f"==================================================")
+    logger.info(f"System Running as {args.role.upper()} on port {args.port}")
+    logger.info(f"LAN IP: {lan_ip} (Use this IP for other machines to connect)")
+    logger.info(f"==================================================")
     
     # 1. Start P2P Node
     host = "0.0.0.0" # Bind all interfaces

@@ -7,3 +7,5 @@ TYPE_BITMAP    = 0x03   # Broadcast available chunks
 TYPE_REQUEST = 4      # Payload: chunk_seq (int)
 TYPE_DATA = 5         # Payload: data bytes
 TYPE_PEER_LIST = 6    # Payload: JSON list of [host, port, role]
+TYPE_PING = 7         # Payload: timestamp (float)
+TYPE_PONG = 8         # Payload: echo timestamp (float)

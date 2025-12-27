@@ -29,6 +29,9 @@ class StatsManager:
         # Source tracking for visualization
         self.download_by_source: Dict[str, int] = {} 
         self.recent_downloads: List[tuple] = [] # (timestamp, bytes, source)
+        
+        # Network Quality
+        self.avg_rtt = 0.0
 
     def add_upload(self, num_bytes: int):
         self.upload_bytes += num_bytes
@@ -44,6 +47,9 @@ class StatsManager:
 
     def update_peers(self, peers: List[tuple]):
         self.active_peers = peers
+        
+    def update_network_quality(self, avg_rtt: float):
+        self.avg_rtt = avg_rtt
 
     def update_buffer_health(self, count: int):
         self.buffer_health = count
@@ -85,5 +91,6 @@ class StatsManager:
             "buffer_health": self.buffer_health,
             "bitmap": self.my_bitmap_summary,
             "source_distribution": self.download_by_source,
-            "source_distribution_10s": recent_dist
+            "source_distribution_10s": recent_dist,
+            "avg_rtt": round(self.avg_rtt, 1)
         }

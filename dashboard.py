@@ -137,6 +137,11 @@ HTML_TEMPLATE = """
                     document.getElementById('peer_count').textContent = data.peer_count;
                     document.getElementById('bitmap').textContent = data.bitmap;
                     document.getElementById('buffer_health').textContent = data.buffer_health;
+                    
+                    // Add RTT if element exists, or just log (need to add HTML in future, but for now let's append to peer count text)
+                    if (data.avg_rtt) {
+                         document.getElementById('peer_count').textContent += ` (Avg RTT: ${data.avg_rtt}ms)`;
+                    }
 
                     const peerList = document.getElementById('peer_list');
                     peerList.innerHTML = '';

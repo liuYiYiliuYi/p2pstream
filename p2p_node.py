@@ -110,6 +110,24 @@ class P2PNode:
             except Exception as e:
                 logger.error(f"PEX parse error from {addr}: {e}")
 
+        elif packet.msg_type == P2P.TYPE_PING:
+            # Reply with PONG, echoing the payload (timestamp)
+            try:
+                pong = Packet(ver=1, msg_type=P2P.TYPE_PONG, seq=0, timestamp=time.time(), payload=packet.payload)
+                self.transport.send_packet(pong, addr)
+            except:
+                pass
+
+        elif packet.msg_type == P2P.TYPE_PONG:
+            try:
+                sent_time = float(packet.payload.decode('utf-8'))
+                rtt = time.time() - sent_time
+                if addr in self.peer_manager.peers:
+                    self.peer_manager.peers[addr].update_rtt(rtt)
+                    # logger.debug(f"RTT to {addr}: {rtt*1000:.1f}ms")
+            except:
+                pass
+
         elif packet.msg_type == P2P.TYPE_HEARTBEAT:
             # Just updates liveness (handled above)
             pass
@@ -220,12 +238,27 @@ class P2PNode:
             # Pass list of (host, port) tuples
             StatsManager().update_peers(list(peers.keys()))
             
+            # Additional Stats: Avg RTT
+            total_rtt = 0
+            count = 0
+            for p in peers.values():
+                if p.rtt > 0:
+                    total_rtt += p.rtt
+                    count += 1
+            avg_rtt_ms = (total_rtt / count * 1000) if count > 0 else 0
+            StatsManager().update_network_quality(avg_rtt_ms)
+
             if not peers:
                 continue
             
-            packet = Packet(ver=1, msg_type=P2P.TYPE_HEARTBEAT, seq=0, timestamp=time.time(), payload=b"")
+            # Send Heartbeat AND Ping
+            packet_hb = Packet(ver=1, msg_type=P2P.TYPE_HEARTBEAT, seq=0, timestamp=time.time(), payload=b"")
+            payload_ping = str(time.time()).encode('utf-8')
+            packet_ping = Packet(ver=1, msg_type=P2P.TYPE_PING, seq=0, timestamp=time.time(), payload=payload_ping)
+
             for addr in peers:
-                self.transport.send_packet(packet, addr)
+                self.transport.send_packet(packet_hb, addr)
+                self.transport.send_packet(packet_ping, addr)
 
     async def loop_pex(self):
         """
@@ -292,76 +325,22 @@ class P2PNode:
 
     async def loop_schedule_fetch(self):
         """
-        Naive Scheduler:
-        1. Find chunks that neighbors have but I don't.
-        2. Pick one and request it.
+        Uses P2PScheduler to decide what to fetch.
         """
+        # Lazy import to avoid circular dependency if any
+        from scheduler import P2PScheduler
+        scheduler = P2PScheduler()
+
         while self.running:
             # Check more frequently for lower latency
             await asyncio.sleep(0.1) 
             
-            # Simple logic: Union of all remote bitmaps
+            # Use Scheduler to get fetch plan
             peers = self.peer_manager.get_active_peers()
-            if not peers:
-                continue
-
-            available_unknown_chunks = set()
-            chunk_owners = {} # seq -> list of owner_addrs
-
-            for addr, peer in peers.items():
-                remote_chunks = peer.remote_bitmap
-                new_chunks = remote_chunks - self.my_bitmap
-                available_unknown_chunks.update(new_chunks)
-                
-                for c in new_chunks:
-                    if c not in chunk_owners:
-                        chunk_owners[c] = []
-                    chunk_owners[c].append(addr)
-
-            if not available_unknown_chunks:
-                continue
-
-            # Strategy: Sequential / Latency-First
-            # 1. Sort available chunks in DESCENDING order (newest first).
-            # 2. Request the top N chunks to fill the pipeline.
+            requests = scheduler.schedule(self.my_bitmap, peers)
             
-            sorted_chunks = sorted(list(available_unknown_chunks), reverse=True)
-            
-            # Rate Limit / Batch Size: Request up to 20 chunks per loop iteration
-            # This ensures we utilize bandwidth but don't flood
-            batch_size = 20
-            chunks_to_fetch = sorted_chunks[:batch_size]
-            
-            for chunk_to_fetch in chunks_to_fetch:
-                # Server Offloading Logic:
-                # 1. Filter owners by role
-                owners = chunk_owners[chunk_to_fetch]
-                viewers = []
-                broadcasters = []
-                
-                for o_addr in owners:
-                    peer = self.peer_manager.get_peer(o_addr)
-                    if peer and peer.role == "viewer":
-                        viewers.append(o_addr)
-                    else:
-                        broadcasters.append(o_addr)
-                
-                # 2. Prioritize Viewers
-                if viewers:
-                    target_peer = random.choice(viewers)
-                elif broadcasters:
-                    # OPTIMIZATION: Broadcaster Backoff
-                    # If only Broadcaster has it, mostly wait for peers to get it.
-                    # Sacrifice Latency for P2P Ratio.
-                    if random.random() < 0.9:
-                         continue
-                         
-                    target_peer = random.choice(broadcasters)
-                else:
-                    # Should not happen as we got chunk from availability list
-                    continue
-                
-                payload = str(chunk_to_fetch).encode('utf-8')
+            for chunk_id, target_peer in requests:
+                payload = str(chunk_id).encode('utf-8')
                 packet = Packet(
                     ver=1,
                     msg_type=P2P.TYPE_REQUEST,
@@ -370,7 +349,7 @@ class P2PNode:
                     payload=payload
                 )
                 self.transport.send_packet(packet, target_peer)
-                logger.info(f"Requested chunk {chunk_to_fetch} from {target_peer}")
+                logger.debug(f"Requested chunk {chunk_id} from {target_peer}") # Reduced log level
                 
             # Sleep less to be more responsive
             await asyncio.sleep(0.05)
