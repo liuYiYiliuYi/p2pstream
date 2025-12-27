@@ -1,4 +1,5 @@
 import asyncio
+import socket
 import argparse
 import logging
 import cv2
@@ -119,19 +120,33 @@ async def viewer_loop(node: P2PNode):
 
         await asyncio.sleep(0.01)
 
-def get_lan_ip():
+def get_lan_ips():
+    ips = []
+    # Method 1: Connect generic (gives default route interface)
     s = None
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        # Doesn't need to be reachable
         s.connect(('8.8.8.8', 1))
-        IP = s.getsockname()[0]
+        ip = s.getsockname()[0]
+        if not ip.startswith('127.'):
+            ips.append(f"{ip} (Default)")
     except Exception:
-        IP = '127.0.0.1'
+        pass
     finally:
         if s:
             s.close()
-    return IP
+            
+    # Method 2: Iterate interfaces (better for multi-homed or VPN)
+    try:
+        # getaddrinfo with empty host returns all
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ip = info[4][0]
+            if not ip.startswith('127.') and ip not in [x.split()[0] for x in ips]:
+                ips.append(ip)
+    except Exception:
+        pass
+        
+    return ips if ips else ['127.0.0.1']
 
 async def main():
     parser = argparse.ArgumentParser(description="P2P Video Streaming Node")
@@ -142,10 +157,11 @@ async def main():
     args = parser.parse_args()
     
     # Print Multi-machine info
-    lan_ip = get_lan_ip()
+    lan_ips = get_lan_ips()
     logger.info(f"==================================================")
     logger.info(f"System Running as {args.role.upper()} on port {args.port}")
-    logger.info(f"LAN IP: {lan_ip} (Use this IP for other machines to connect)")
+    logger.info(f"Available IPs: {lan_ips}")
+    logger.info(f"If connecting from another machine, try the one that looks like 192.168.x.x or 172.20.x.x")
     logger.info(f"==================================================")
     
     # 1. Start P2P Node

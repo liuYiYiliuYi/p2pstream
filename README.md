@@ -11,7 +11,25 @@
 
 ## 环境依赖
 
+
 需要 Python 3.10+。
+
+### 使用 Conda 配置环境 (推荐)
+
+如果您使用 Anaconda 或 Miniconda，建议创建独立环境：
+
+```bash
+# 1. 创建名为 p2pstream 的环境，指定 Python 3.10
+conda create -n p2pstream python=3.10
+
+# 2. 激活环境
+conda activate p2pstream
+
+# 3. 安装依赖
+pip install -r requirements.txt
+```
+
+或者手动安装：
 
 ```bash
 pip install opencv-python mss numpy aiohttp
