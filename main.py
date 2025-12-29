@@ -64,9 +64,10 @@ async def broadcaster_loop(node: P2PNode):
         node.my_bitmap.update(new_chunk_ids)
         
         # 5. Clean up old frames
-        # Remove frames older than 100 frames (approx 5 seconds at 20fps)
-        if current_frame_id > 100:
-            old_frame_id = current_frame_id - 100
+        # Remove frames older than 1000 frames (approx 50 seconds at 20fps)
+        # This gives plenty of time for new peers to catch up or for retransmissions.
+        if current_frame_id > 1000:
+            old_frame_id = current_frame_id - 1000
             # Rough cleanup: chunks are frame_id * 1000 + frag_index
             # Calculate range of chunk IDs to remove
             start_chunk = old_frame_id * 1000
