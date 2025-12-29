@@ -3,6 +3,7 @@ import time
 import json
 import logging
 import random
+import socket
 from typing import Set, Dict, Optional
 
 from protocol import Packet
@@ -98,6 +99,13 @@ class P2PNode:
                     # Ignore self (simple check)
                     if port == self.port: 
                         continue
+                    
+                    # Ignore localhost/0.0.0.0 if we got it (should actaually filter at source, but safety here)
+                    if host.startswith("127.") or host == "0.0.0.0" or host == "localhost":
+                         # If we are seemingly local, try to connect to localhost? No, usually bad in prod.
+                         # But for local testing it helps.
+                         pass
+
                     
                     # Connect if not already connected
                     if (host, port) not in self.peer_manager.peers:
@@ -210,9 +218,35 @@ class P2PNode:
         for p_addr, peer in peers.items():
             peer_list_data.append([peer.host, peer.port, peer.role])
         
+        # Add Self to the list so the new joiner knows about me (the broadcaster/sender)
+        # But we must send our ACTUAL IP, not 0.0.0.0
+        my_ip = self.get_best_ip_for_peer(addr[0])
+        peer_list_data.append([my_ip, self.port, self.role])
+
         payload = json.dumps(peer_list_data).encode('utf-8')
         packet = Packet(ver=1, msg_type=P2P.TYPE_PEER_LIST, seq=0, timestamp=time.time(), payload=payload)
         self.transport.send_packet(packet, addr)
+
+    def get_best_ip_for_peer(self, peer_ip: str) -> str:
+        """
+        Attempts to find the most reachable IP for a given peer.
+        If peer is local, return 127.0.0.1.
+        Otherwise return LAN IP.
+        """
+        if peer_ip == "127.0.0.1" or peer_ip == "localhost":
+            return "127.0.0.1"
+        
+        # Try to find a socket route
+        s = None
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect((peer_ip, 1)) # Dummy connect
+            return s.getsockname()[0]
+        except:
+            return "0.0.0.0" # Fallback
+        finally:
+            if s: s.close()
+
 
     def send_data(self, addr: tuple, seq: int):
         data = self.data_store.get(seq, b"")
@@ -283,13 +317,24 @@ class P2PNode:
             for addr, peer in peers.items():
                 peer_list_data.append([peer.host, peer.port, peer.role])
                 
-            # Add self? Recipient knows sender.
-            
-            payload = json.dumps(peer_list_data).encode('utf-8')
-            packet = Packet(ver=1, msg_type=P2P.TYPE_PEER_LIST, seq=0, timestamp=time.time(), payload=payload)
+            # Add self
+            # But wait, self IP depends on who we are talking to if we have multiple NICs.
+            # For simplicity, we calculate best IP for each target? No, expensive.
+            # Let's just use a generic LAN IP.
+            # Better strategy: for each neighbor, send specific list? 
+            # Or just append "me" dynamically in the send loop.
             
             for addr in peers:
                 try:
+                    # Dynamically add SELF to the list for this specific target
+                    my_ip = self.get_best_ip_for_peer(addr[0])
+                    # Copy list
+                    final_list = list(peer_list_data)
+                    final_list.append([my_ip, self.port, self.role])
+                    
+                    payload = json.dumps(final_list).encode('utf-8')
+                    packet = Packet(ver=1, msg_type=P2P.TYPE_PEER_LIST, seq=0, timestamp=time.time(), payload=payload)
+            
                     self.transport.send_packet(packet, addr)
                 except:
                     pass

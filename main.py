@@ -184,7 +184,8 @@ async def main():
     
     # 4. Start Role-Specific Task
     if args.role == "broadcaster":
-        cv2.namedWindow("Broadcaster Monitor", cv2.WINDOW_AUTOSIZE - 100) # Dummy window to keep python happy on mac sometimes
+        # Use simpler window flag for better cross-platform compatibility
+        cv2.namedWindow("Broadcaster Monitor", cv2.WINDOW_AUTOSIZE) 
         asyncio.create_task(broadcaster_loop(node))
     else:
         asyncio.create_task(viewer_loop(node))
