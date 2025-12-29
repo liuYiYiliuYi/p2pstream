@@ -197,9 +197,12 @@ class P2PNode:
                         prev = x
                 ranges.append([start, prev])
             
-            # Limit ranges to safe UDP size (e.g., 200 ranges ~ 4KB)
-            if len(ranges) > 200:
-                ranges = ranges[-200:]
+            # Limit ranges to safe UDP size (MTU ~1400 safe payload)
+            # Each range is "[xxxx, yyyy]" approx 15 bytes.
+            # 50 ranges * 15 = 750 bytes. Safe.
+            # 200 ranges was ~3000 bytes -> Fragmentation -> Loss on some networks.
+            if len(ranges) > 50:
+                ranges = ranges[-50:]
             
             payload = json.dumps(ranges).encode('utf-8')
         
