@@ -66,7 +66,7 @@ python3 main.py --role viewer --port 8889 --connect 127.0.0.1:8888
 
 ```bash
 # Viewer 2 连接到 Viewer 1
-python3 main.py --role viewer --port 8890 --connect 127.0.0.1:8889
+python3 main.py --role viewer --port 8889 --connect 127.0.0.1:8889
 ```
 
 系统会自动交换 Bitmap，Viewer 2 能够从 Viewer 1 处获取数据（如果 Viewer 1 已经缓存了数据），从而减轻 Broadcaster 的压力。

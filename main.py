@@ -16,7 +16,11 @@ from protocol import Packet
 # Configure Logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler("p2p_node.log", mode='w')
+    ]
 )
 logger = logging.getLogger("Main")
 

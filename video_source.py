@@ -1,4 +1,5 @@
 import cv2
+import time
 import numpy as np
 import mss
 import logging
@@ -25,6 +26,7 @@ class ScreenCapturer:
         """
         try:
             # Capture
+            t0 = time.time()
             sct_img = self.sct.grab(self.monitor)
             # Convert to numpy array (BGRA)
             frame = np.array(sct_img)
@@ -37,6 +39,10 @@ class ScreenCapturer:
             # Compress to JPG
             # Quality 50 is a good tradeoff for speed/size
             retval, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 50])
+            
+            dt = (time.time() - t0) * 1000
+            if dt > 30:
+                logger.warning(f"Slow Capture+Encode: {dt:.1f}ms")
             
             if not retval:
                 raise RuntimeError("Failed to encode frame to JPEG")

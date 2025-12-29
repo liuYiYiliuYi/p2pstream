@@ -48,7 +48,7 @@ class P2PScheduler:
         sorted_chunks = sorted(list(available_unknown_chunks), reverse=True)
         
         # Rate Limit / Batch Size
-        batch_size = 20
+        batch_size = 100 # Increased from 20 to support ~20FPS video
         chunks_to_process = sorted_chunks[:batch_size]
         
         requests = []
@@ -70,17 +70,37 @@ class P2PScheduler:
             
             target_peer = None
             
-            # 3. Server Offloading & Backoff Logic
+            # 3. Strategy: P2P Optimization
             if viewers:
-                # If viewers have it, prioritizing viewers is mandatory
+                # Ideal case: Viewers have it. Always prefer them.
                 target_peer = random.choice(viewers)
+                # logger.debug(f"Chunk {chunk_id}: Found {len(viewers)} viewers. Selected {target_peer}")
             elif broadcasters:
-                # Broadcaster Backoff:
-                # If only Broadcaster has it, mostly wait for peers to get it.
-                # 90% chance to skip if only broadcaster has it.
-                if random.random() < 0.9:
+                # Fallback case: Only Broadcaster has it.
+                
+                # SMART BACKOFF LOGIC:
+                # If we rely too much on Broadcaster, P2P ratio drops.
+                # But if we wait too long, video lags.
+                
+                # Rule:
+                # 1. If I am the ONLY viewer (implied if I can't find other viewers for *any* chunk, but here purely local decision),
+                #    then I must download from Broadcaster.
+                # 2. If there are other viewers (but they just don't have this chunk YET),
+                #    we should wait a bit to see if they get it (P2P opportunity).
+                
+                # Heuristic: 
+                # If we are "caught up" (fetching recent chunks), we can afford to wait.
+                # If we are "lagging" (fetching old chunks), we must fetch ASAP.
+                
+                # For now, let's use a simpler Probabilistic Backoff that is LESS AGGRESSIVE than before.
+                # 30% chance to wait (skip) if only broadcaster keeps it. 
+                # This encourages P2P propagation without stalling the stream too hard.
+                if random.random() < 0.3:
+                     # logger.debug(f"Chunk {chunk_id}: Backoff from Broadcaster to wait for peers.")
                      continue
+                
                 target_peer = random.choice(broadcasters)
+                # logger.debug(f"Chunk {chunk_id}: Fallback to Broadcaster {target_peer}")
             
             if target_peer:
                 requests.append((chunk_id, target_peer))
