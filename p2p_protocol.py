@@ -9,3 +9,4 @@ TYPE_DATA = 5         # Payload: data bytes
 TYPE_PEER_LIST = 6    # Payload: JSON list of [host, port, role]
 TYPE_PING = 7         # Payload: timestamp (float)
 TYPE_PONG = 8         # Payload: echo timestamp (float)
+TYPE_STATS_REPORT = 9 # Payload: JSON stats from peer

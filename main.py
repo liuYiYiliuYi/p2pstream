@@ -169,6 +169,10 @@ async def main():
     logger.info(f"If connecting from another machine, try the one that looks like 192.168.x.x or 172.20.x.x")
     logger.info(f"==================================================")
     
+    # 0. Init Stats
+    from stats_manager import StatsManager
+    StatsManager().role = args.role
+
     # 1. Start P2P Node
     host = "0.0.0.0" # Bind all interfaces
     node = P2PNode(host, args.port, role=args.role)

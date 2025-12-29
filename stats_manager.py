@@ -14,6 +14,8 @@ class StatsManager:
         self.upload_bytes = 0
         self.download_bytes = 0
         self.start_time = time.time()
+        self.role = "probing" 
+
         
         # Recent throughput calculation
         self.last_calc_time = time.time()
@@ -32,6 +34,10 @@ class StatsManager:
         
         # Network Quality
         self.avg_rtt = 0.0
+
+        # Global Stats Aggregation (for Broadcaster view)
+        self.global_peer_stats: Dict[str, Any] = {} # "ip:port" -> stats_dict
+
 
     def add_upload(self, num_bytes: int):
         self.upload_bytes += num_bytes
@@ -57,6 +63,15 @@ class StatsManager:
     def update_bitmap(self, summary: str):
         self.my_bitmap_summary = summary
 
+    def record_peer_report(self, addr_str: str, report: dict):
+        """
+        Record a stats report from a remote peer.
+        timstamp it to prune old ones later.
+        """
+        report['last_seen'] = time.time()
+        self.global_peer_stats[addr_str] = report
+
+
     def get_stats(self) -> Dict[str, Any]:
         # Calculate rates
         now = time.time()
@@ -81,7 +96,9 @@ class StatsManager:
             recent_dist[src] = recent_dist.get(src, 0) + b
 
         return {
+            "role": self.role,
             "uptime": int(now - self.start_time),
+
             "upload_rate": self.current_upload_rate,
             "download_rate": self.current_download_rate,
             "total_upload": self.upload_bytes,
@@ -92,5 +109,6 @@ class StatsManager:
             "bitmap": self.my_bitmap_summary,
             "source_distribution": self.download_by_source,
             "source_distribution_10s": recent_dist,
-            "avg_rtt": round(self.avg_rtt, 1)
+            "avg_rtt": round(self.avg_rtt, 1),
+            "global_stats": self.global_peer_stats
         }

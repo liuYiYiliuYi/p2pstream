@@ -39,7 +39,11 @@ class P2PNode:
         asyncio.create_task(self.loop_broadcast_bitmap())
         asyncio.create_task(self.loop_schedule_fetch())
         asyncio.create_task(self.loop_prune_peers())
+        asyncio.create_task(self.loop_prune_peers())
         asyncio.create_task(self.loop_pex())
+        if self.role == "viewer":
+            asyncio.create_task(self.loop_report_stats())
+
 
     async def stop(self):
         self.running = False
@@ -112,6 +116,9 @@ class P2PNode:
                         logger.info(f"PEX: Discovered new peer {host}:{port} ({role}). Connecting...")
                         self.connect_to(host, port)
                         count_new += 1
+                    else:
+                        # Update role if existing
+                        self.peer_manager.update_peer((host, port), role=role)
                         
                 if count_new > 0:
                     logger.info(f"PEX: Connected to {count_new} new peers.")
@@ -171,10 +178,29 @@ class P2PNode:
             if seq not in self.my_bitmap:
                 self.data_store[seq] = packet.payload
                 self.my_bitmap.add(seq)
+                
+                # Update Stats
+                from stats_manager import StatsManager
+                src_str = f"{addr[0]}:{addr[1]}"
+                StatsManager().add_download(len(packet.payload), source=src_str)
+                
                 logger.info(f"Received DATA chunk {seq} from {addr}")
                 # Ideally, broadcast new bitmap or just let next periodic broadcast handle it
             else:
                 logger.debug(f"Received duplicate chunk {seq} from {addr}")
+
+        elif packet.msg_type == P2P.TYPE_STATS_REPORT:
+            try:
+                # Only Broadcaster needs to collect these, but technically anyone running dashboard could.
+                from stats_manager import StatsManager
+                report = json.loads(packet.payload.decode('utf-8'))
+                # Identify peer by the SENDER address, not what they claim?
+                # Actually, report might contain metadata, but addr is source truth.
+                addr_str = f"{addr[0]}:{addr[1]}"
+                StatsManager().record_peer_report(addr_str, report)
+            except Exception as e:
+                logger.error(f"Stats report parse error {addr}: {e}")
+
 
     def send_bitmap(self, addr: tuple):
         """
@@ -261,6 +287,10 @@ class P2PNode:
             payload=data
         )
         self.transport.send_packet(packet, addr)
+        
+        # Update Stats
+        from stats_manager import StatsManager
+        StatsManager().add_upload(len(data))
 
     async def loop_heartbeat(self):
         """
@@ -401,3 +431,53 @@ class P2PNode:
                 
             # Sleep less to be more responsive
             await asyncio.sleep(0.05)
+
+    async def loop_report_stats(self):
+        """
+        Periodically capture local stats and report to the Broadcaster (or bootstrap node).
+        """
+        from stats_manager import StatsManager
+        
+        while self.running:
+            await asyncio.sleep(3.0) # Report every 3 seconds
+            
+            # 1. Get Local Stats
+            stats = StatsManager().get_stats()
+            # Prune complex objects to save bandwidth/complexity?
+            # We want: upload/download rates, buffer health, peer count.
+            report = {
+                "role": self.role,
+                "dl_rate": stats["download_rate"],
+                "ul_rate": stats["upload_rate"],
+                "buffer": stats["buffer_health"],
+                "peers": stats["peer_count"],
+                "rtt": stats["avg_rtt"],
+                "sources": stats["source_distribution_10s"]
+            }
+            
+            payload = json.dumps(report).encode('utf-8')
+            packet = Packet(ver=1, msg_type=P2P.TYPE_STATS_REPORT, seq=0, timestamp=time.time(), payload=payload)
+            
+            # 2. Send to Broadcaster
+            # Finding the broadcaster is tricky if we are 2 hops away.
+            # For simplicity in this logical topology: 
+            # Send to ALL connected peers? No, flood.
+            # Send to the peer marked as 'broadcaster'?
+            
+            peers = self.peer_manager.get_active_peers()
+            broadcaster_addr = None
+            
+            for addr, peer in peers.items():
+                if peer.role == "broadcaster":
+                    broadcaster_addr = addr
+                    break
+            
+            if broadcaster_addr:
+                 self.transport.send_packet(packet, broadcaster_addr)
+            else:
+                # If we don't know who is broadcaster, maybe send to everyone?
+                # Or just the first peer we connected to?
+                # Let's send to all 'broadcaster' roles we know. 
+                # If none, we can't report.
+                pass
+
