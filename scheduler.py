@@ -44,8 +44,10 @@ class P2PScheduler:
         if not available_unknown_chunks:
             return []
 
-        # 2. Strategy: Sequential / Latency-First (Reverse Sort)
-        sorted_chunks = sorted(list(available_unknown_chunks), reverse=True)
+        # 2. Strategy: Sequential (Oldest First) -> "True Urgency"
+        # We prioritize what we need NEXT to play, rather than the newest data.
+        # This naturally allows newer chunks to propagate in the P2P network while we catch up.
+        sorted_chunks = sorted(list(available_unknown_chunks), reverse=False)
         
         # Rate Limit / Batch Size
         batch_size = 100 # Increased from 20 to support ~20FPS video
