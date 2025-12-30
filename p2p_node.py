@@ -14,7 +14,7 @@ import p2p_protocol as P2P
 logger = logging.getLogger(__name__)
 
 class P2PNode:
-    def __init__(self, host: str, port: int, role: str = "viewer", initial_chunks: Optional[Set[int]] = None):
+    def __init__(self, host: str, port: int, role: str = "viewer", algo_name: str = "default", initial_chunks: Optional[Set[int]] = None):
         self.host = host
         self.port = port
         self.role = role
@@ -28,17 +28,33 @@ class P2PNode:
         self.transport = UDPTransport(on_packet_received=self.handle_packet)
         self.peer_manager = PeerManager()
         self.running = False
+        
+        # Initialize Algorithm Strategy
+        from p2p_algorithms import SplitterAlgorithm, DefaultPushAlgorithm, RarestFirstAlgorithm, EDFAlgorithm
+        
+        if self.role == "broadcaster":
+            self.algorithm = SplitterAlgorithm(self)
+        else:
+            if algo_name == "rarest":
+                self.algorithm = RarestFirstAlgorithm(self)
+            elif algo_name == "edf":
+                self.algorithm = EDFAlgorithm(self)
+            else:
+                self.algorithm = DefaultPushAlgorithm(self)
+        
+        logger.info(f"Initialized P2PNode with algorithm: {self.algorithm.__class__.__name__}")
 
     async def start(self):
         self.running = True
         await self.transport.start_server(self.host, self.port)
         logger.info(f"P2PNode started on {self.host}:{self.port}")
         
+        self.algorithm.on_start()
+        
         # Start background tasks
         asyncio.create_task(self.loop_heartbeat())
         asyncio.create_task(self.loop_broadcast_bitmap())
-        asyncio.create_task(self.loop_schedule_fetch())
-        asyncio.create_task(self.loop_prune_peers())
+        asyncio.create_task(self.loop_algorithm_tick()) # REPLACES loop_schedule_fetch
         asyncio.create_task(self.loop_prune_peers())
         asyncio.create_task(self.loop_pex())
         if self.role == "viewer":
@@ -70,6 +86,214 @@ class P2PNode:
         """
         # Always update peer liveness
         self.peer_manager.update_peer(addr)
+        
+        # DELEGATE TO ALGORITHM FIRST
+        if self.algorithm.handle_packet(packet, addr):
+            return
+
+        if packet.msg_type == P2P.TYPE_HANDSHAKE:
+            # Parse Role if present
+            try:
+                if packet.payload:
+                    data = json.loads(packet.payload.decode('utf-8'))
+                    remote_role = data.get("role", "viewer")
+                    self.peer_manager.update_peer(addr, role=remote_role)
+                else:
+                    self.peer_manager.update_peer(addr, role="viewer")
+            except:
+                self.peer_manager.update_peer(addr, role="viewer")
+
+            logger.info(f"Received HANDSHAKE from {addr}")
+            # Reply with bitmap so they know what we have immediately
+            self.send_bitmap(addr)
+            
+            # PEX: If we are broadcaster, send our peer list to the new joiner immediately
+            if self.role == "broadcaster":
+                self.send_peer_list(addr)
+            
+            self.algorithm.on_peer_discovered(addr)
+
+
+        elif packet.msg_type == P2P.TYPE_PEER_LIST:
+            try:
+                # Payload: [[host, port, role], ...]
+                peers_list = json.loads(packet.payload.decode('utf-8'))
+                
+                count_new = 0
+                for host, port, role in peers_list:
+                    if port == self.port: 
+                        continue
+                    
+                    if host.startswith("127.") or host == "0.0.0.0" or host == "localhost":
+                         pass
+
+                    if (host, port) not in self.peer_manager.peers:
+                        logger.info(f"PEX: Discovered new peer {host}:{port} ({role}). Connecting...")
+                        self.connect_to(host, port)
+                        count_new += 1
+                    else:
+                        self.peer_manager.update_peer((host, port), role=role)
+                        
+                if count_new > 0:
+                    logger.info(f"PEX: Connected to {count_new} new peers.")
+            except Exception as e:
+                logger.error(f"PEX parse error from {addr}: {e}")
+
+        elif packet.msg_type == P2P.TYPE_PING:
+            try:
+                pong = Packet(ver=1, msg_type=P2P.TYPE_PONG, seq=0, timestamp=time.time(), payload=packet.payload)
+                self.transport.send_packet(pong, addr)
+            except:
+                pass
+
+        elif packet.msg_type == P2P.TYPE_PONG:
+            try:
+                sent_time = float(packet.payload.decode('utf-8'))
+                rtt = time.time() - sent_time
+                if addr in self.peer_manager.peers:
+                    self.peer_manager.peers[addr].update_rtt(rtt)
+            except:
+                pass
+
+        elif packet.msg_type == P2P.TYPE_HEARTBEAT:
+            pass
+
+        elif packet.msg_type == P2P.TYPE_BITMAP:
+            try:
+                data = json.loads(packet.payload.decode('utf-8'))
+                new_set = set()
+                if isinstance(data, list) and len(data) > 0 and isinstance(data[0], list):
+                    for s, e in data:
+                        new_set.update(range(s, e + 1))
+                else:
+                    new_set = set(data)
+                
+                self.peer_manager.update_bitmap(addr, new_set)
+            except Exception as e:
+                logger.error(f"Bitmap parse error {addr}: {e}")
+
+        elif packet.msg_type == P2P.TYPE_REQUEST:
+            try:
+                seq_requested = int(packet.payload.decode('utf-8'))
+                if seq_requested in self.data_store:
+                    self.send_data(addr, seq_requested)
+                else:
+                    logger.warning(f"Peer {addr} requested chunk {seq_requested} which I don't have.")
+            except Exception as e:
+                logger.error(f"Failed to handle request from {addr}: {e}")
+
+        elif packet.msg_type == P2P.TYPE_DATA:
+            seq = packet.seq
+            if seq not in self.my_bitmap:
+                self.data_store[seq] = packet.payload
+                self.my_bitmap.add(seq)
+                
+                from stats_manager import StatsManager
+                src_str = f"{addr[0]}:{addr[1]}"
+                StatsManager().add_download(len(packet.payload), source=src_str)
+                
+                logger.info(f"Received DATA chunk {seq} from {addr}")
+                
+                # TRIGGER ALGORITHM HOOK (For Flooding/Push)
+                self.algorithm.on_chunk_received(seq, packet.payload, addr)
+                
+            else:
+                logger.debug(f"Received duplicate chunk {seq} from {addr}")
+
+        elif packet.msg_type == P2P.TYPE_STATS_REPORT:
+            try:
+                from stats_manager import StatsManager
+                report = json.loads(packet.payload.decode('utf-8'))
+                addr_str = f"{addr[0]}:{addr[1]}"
+                StatsManager().record_peer_report(addr_str, report)
+            except Exception as e:
+                logger.error(f"Stats report parse error {addr}: {e}")
+
+    def send_bitmap(self, addr: tuple):
+        if not self.my_bitmap:
+            payload = b"[]"
+        else:
+            sorted_chunks = sorted(list(self.my_bitmap))
+            ranges = []
+            if sorted_chunks:
+                start = sorted_chunks[0]
+                prev = sorted_chunks[0]
+                for x in sorted_chunks[1:]:
+                    if x == prev + 1:
+                        prev = x
+                    else:
+                        ranges.append([start, prev])
+                        start = x
+                        prev = x
+                ranges.append([start, prev])
+            
+            if len(ranges) > 50:
+                ranges = ranges[-50:]
+            
+            payload = json.dumps(ranges).encode('utf-8')
+        
+        try:
+            packet = Packet(
+                ver=1, msg_type=P2P.TYPE_BITMAP, seq=0, 
+                timestamp=time.time(), payload=payload
+            )
+            self.transport.send_packet(packet, addr)
+        except ValueError as e:
+            logger.error(f"Bitmap send error {addr}: {e}")
+
+    def send_peer_list(self, addr: tuple):
+        peers = self.peer_manager.get_active_peers()
+        peer_list_data = []
+        for p_addr, peer in peers.items():
+            peer_list_data.append([peer.host, peer.port, peer.role])
+        
+        my_ip = self.get_best_ip_for_peer(addr[0])
+        peer_list_data.append([my_ip, self.port, self.role])
+
+        payload = json.dumps(peer_list_data).encode('utf-8')
+        packet = Packet(ver=1, msg_type=P2P.TYPE_PEER_LIST, seq=0, timestamp=time.time(), payload=payload)
+        self.transport.send_packet(packet, addr)
+
+    def get_best_ip_for_peer(self, peer_ip: str) -> str:
+        if peer_ip == "127.0.0.1" or peer_ip == "localhost":
+            return "127.0.0.1"
+        
+        s = None
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect((peer_ip, 1))
+            return s.getsockname()[0]
+        except:
+            return "0.0.0.0" 
+        finally:
+            if s: s.close()
+
+    def send_data(self, addr: tuple, seq: int):
+        data = self.data_store.get(seq, b"")
+        packet = Packet(
+            ver=1,
+            msg_type=P2P.TYPE_DATA,
+            seq=seq,
+            timestamp=time.time(),
+            payload=data
+        )
+        self.transport.send_packet(packet, addr)
+        
+        from stats_manager import StatsManager
+        StatsManager().add_upload(len(data))
+    
+    def send_data_packet(self, addr: tuple, seq: int, payload: bytes):
+        packet = Packet(
+            ver=1,
+            msg_type=P2P.TYPE_DATA,
+            seq=seq,
+            timestamp=time.time(),
+            payload=payload
+        )
+        self.transport.send_packet(packet, addr)
+        from stats_manager import StatsManager
+        StatsManager().add_upload(len(payload))
+
 
         if packet.msg_type == P2P.TYPE_HANDSHAKE:
             # Parse Role if present
@@ -185,6 +409,10 @@ class P2PNode:
                 StatsManager().add_download(len(packet.payload), source=src_str)
                 
                 logger.info(f"Received DATA chunk {seq} from {addr}")
+                
+                # TRIGGER ALGORITHM HOOK (For Flooding/Push)
+                self.algorithm.on_chunk_received(seq, packet.payload, addr)
+                
                 # Ideally, broadcast new bitmap or just let next periodic broadcast handle it
             else:
                 logger.debug(f"Received duplicate chunk {seq} from {addr}")
@@ -291,6 +519,17 @@ class P2PNode:
         # Update Stats
         from stats_manager import StatsManager
         StatsManager().add_upload(len(data))
+
+    async def loop_algorithm_tick(self):
+        """
+        Periodically tick the algorithm (replaces loop_schedule_fetch).
+        """
+        while self.running:
+            try:
+                self.algorithm.on_tick()
+            except Exception as e:
+                logger.error(f"Algorithm tick error: {e}")
+            await asyncio.sleep(0.1) # 10Hz Tick
 
     async def loop_heartbeat(self):
         """

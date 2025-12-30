@@ -60,6 +60,10 @@ async def broadcaster_loop(node: P2PNode):
             node.data_store[chunk_id] = payload
             new_chunk_ids.add(chunk_id)
             
+            # TRIGGER ALGORITHM HOOK (For Splitter Push)
+            # This makes the broadcaster actively configure the distribution
+            node.algorithm.on_chunk_generated(chunk_id, payload)
+            
         # 4. Update my_bitmap
         node.my_bitmap.update(new_chunk_ids)
         
@@ -158,6 +162,7 @@ async def main():
     parser.add_argument('--role', choices=['broadcaster', 'viewer'], required=True, help="Node role")
     parser.add_argument('--port', type=int, required=True, help="UDP Port to bind")
     parser.add_argument('--connect', type=str, help="Initial peer to connect to (host:port)")
+    parser.add_argument('--algo', choices=['default', 'rarest', 'edf'], default='default', help="P2P Algorithm strategy")
     
     args = parser.parse_args()
     
@@ -175,7 +180,7 @@ async def main():
 
     # 1. Start P2P Node
     host = "0.0.0.0" # Bind all interfaces
-    node = P2PNode(host, args.port, role=args.role)
+    node = P2PNode(host, args.port, role=args.role, algo_name=args.algo)
     await node.start()
     
     # 2. Connect to peer if specified
